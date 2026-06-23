@@ -344,12 +344,9 @@ ACL_BLOCK="    access-control: 0.0.0.0/0 deny\n"
 ACL_BLOCK+="    access-control: ::0/0 deny\n"
 ACL_BLOCK+="    access-control: 127.0.0.0/8 allow\n"
 ACL_BLOCK+="    access-control: ::1/128 allow\n"
+ACL_BLOCK+="    access-control: ${SERVER_IP}/32 allow\n"
 for net in "${CLIENT_NETWORKS[@]}"; do
-    if [[ "$net" == *":"* ]]; then
-        ACL_BLOCK+="    access-control: ${net} allow\n"
-    else
-        ACL_BLOCK+="    access-control: ${net} allow\n"
-    fi
+    ACL_BLOCK+="    access-control: ${net} allow\n"
 done
 
 cat > /etc/unbound/unbound.conf << CONF
