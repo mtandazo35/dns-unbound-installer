@@ -257,8 +257,15 @@ apt-get install -y -qq unbound unbound-anchor dnsutils curl wget rsyslog
 
 if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
     warn "Deshabilitando systemd-resolved (conflicto puerto 53)..."
+    # Guardar resolv.conf original antes de perder DNS
+    [[ ! -f /etc/resolv.conf.pre-unbound ]] && \
+        cp -L /etc/resolv.conf /etc/resolv.conf.pre-unbound 2>/dev/null || true
+    # DNS temporal para que apt siga resolviendo durante la instalación
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
     systemctl stop systemd-resolved
     systemctl disable systemd-resolved
+    info "DNS temporal → 8.8.8.8 (se cambiará a 127.0.0.1 al finalizar)"
 fi
 
 # ==============================================================================
