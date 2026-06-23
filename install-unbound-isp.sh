@@ -251,16 +251,23 @@ fi
 # ==============================================================================
 # 1. DEPENDENCIAS
 # ==============================================================================
-log "Instalando Unbound y dependencias..."
+log "Instalando dependencias..."
 apt-get update -qq
-apt-get install -y -qq unbound unbound-anchor dnsutils curl wget rsyslog
+
+# Instalar todo antes de tocar systemd-resolved para no perder DNS
+PKGS=(unbound unbound-anchor dnsutils curl wget rsyslog)
+[[ -n "$DOT_DOMAIN" ]] && PKGS+=(certbot)
+apt-get install -y -qq "${PKGS[@]}"
+
+# Deshabilitar unbound-resolvconf: sobrescribiría resolv.conf con 127.0.0.1
+# antes de que Unbound esté corriendo, rompiendo DNS para el resto del script
+systemctl disable unbound-resolvconf 2>/dev/null || true
+systemctl stop    unbound-resolvconf 2>/dev/null || true
 
 if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
     warn "Deshabilitando systemd-resolved (conflicto puerto 53)..."
-    # Guardar resolv.conf original antes de perder DNS
     [[ ! -f /etc/resolv.conf.pre-unbound ]] && \
         cp -L /etc/resolv.conf /etc/resolv.conf.pre-unbound 2>/dev/null || true
-    # DNS temporal para que apt siga resolviendo durante la instalación
     chattr -i /etc/resolv.conf 2>/dev/null || true
     printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
     systemctl stop systemd-resolved
@@ -447,11 +454,6 @@ CONF
 # ==============================================================================
 if [[ -n "$DOT_DOMAIN" ]]; then
     log "Configurando DoT/DoH para ${DOT_DOMAIN}..."
-
-    if ! command -v certbot &>/dev/null; then
-        log "  Instalando certbot..."
-        apt-get install -y -qq certbot
-    fi
 
     CERT_LIVE="/etc/letsencrypt/live/${DOT_DOMAIN}"
     if [[ ! -d "$CERT_LIVE" ]]; then
