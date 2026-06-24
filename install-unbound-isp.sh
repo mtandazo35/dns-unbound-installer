@@ -478,17 +478,60 @@ if [[ -n "$DOT_DOMAIN" ]]; then
         chmod 644 /etc/unbound/tls/fullchain.pem
         chmod 640 /etc/unbound/tls/privkey.pem
 
+        # DoT directo en Unbound (puerto 853)
+        # DoH en dnsproxy (puerto 8053) — Unbound nativo solo soporta HTTP/2,
+        # dnsproxy soporta HTTP/1.1 + HTTP/2 (compatible con MikroTik MIPS y otros)
         cat >> /etc/unbound/unbound.conf << DOTCONF
 
-# DoT (853) y DoH (8053)
+# DoT (853) — manejado por Unbound
 server:
     interface: 0.0.0.0@853
-    interface: 0.0.0.0@8053
     tls-port: 853
-    https-port: 8053
     tls-service-key: "/etc/unbound/tls/privkey.pem"
     tls-service-pem: "/etc/unbound/tls/fullchain.pem"
 DOTCONF
+
+        # ── dnsproxy: frontend DoH HTTP/1.1 + HTTP/2 ───────────────────────────
+        log "  Instalando dnsproxy (frontend DoH)..."
+        DNSPROXY_URL=$(curl -sf --max-time 15 https://api.github.com/repos/AdguardTeam/dnsproxy/releases/latest \
+            | python3 -c "import sys,json; r=json.load(sys.stdin); [print(a['browser_download_url']) for a in r['assets'] if 'linux-amd64' in a['name'] and a['name'].endswith('.tar.gz')]" 2>/dev/null | head -1)
+        if [[ -n "$DNSPROXY_URL" ]] && \
+           wget -q --timeout=30 "$DNSPROXY_URL" -O /tmp/dnsproxy.tar.gz 2>/dev/null && \
+           tar xzf /tmp/dnsproxy.tar.gz -C /tmp/ 2>/dev/null && \
+           mv /tmp/linux-amd64/dnsproxy /usr/local/bin/dnsproxy && \
+           chmod +x /usr/local/bin/dnsproxy; then
+            log "  dnsproxy instalado."
+        else
+            warn "  No se pudo descargar dnsproxy. DoH (8053) no estará disponible."
+        fi
+
+        if command -v /usr/local/bin/dnsproxy &>/dev/null; then
+            cat > /etc/systemd/system/dnsproxy.service << DOHSVC
+[Unit]
+Description=AdGuard dnsproxy - DoH HTTP/1.1+HTTP/2
+After=network.target unbound.service
+Requires=unbound.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dnsproxy \\
+  -l 0.0.0.0 \\
+  --port 0 \\
+  --https-port 8053 \\
+  --tls-crt /etc/unbound/tls/fullchain.pem \\
+  --tls-key /etc/unbound/tls/privkey.pem \\
+  -u 127.0.0.1:53
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+DOHSVC
+            systemctl daemon-reload
+            systemctl enable dnsproxy
+            systemctl start dnsproxy
+            log "  dnsproxy activo en :8053 (DoH HTTP/1.1 + HTTP/2)."
+        fi
 
         mkdir -p /etc/letsencrypt/renewal-hooks/deploy
         cat > /etc/letsencrypt/renewal-hooks/deploy/reload-unbound.sh << HOOK
@@ -500,7 +543,8 @@ chown root:unbound /etc/unbound/tls/*.pem
 chmod 644 /etc/unbound/tls/fullchain.pem
 chmod 640 /etc/unbound/tls/privkey.pem
 systemctl reload unbound 2>/dev/null || systemctl restart unbound
-logger -t certbot-unbound "Unbound TLS cert renovado para \${DOMAIN}"
+systemctl restart dnsproxy 2>/dev/null || true
+logger -t certbot-unbound "TLS cert renovado para \${DOMAIN}"
 HOOK
         chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-unbound.sh
         log "  DoT/DoH configurado + hook de renovación instalado."
@@ -831,6 +875,7 @@ fi
 if [[ -n "$DOT_DOMAIN" && -f /etc/unbound/tls/fullchain.pem ]]; then
     check "DoT cert presente"      "openssl x509 -in /etc/unbound/tls/fullchain.pem -noout -subject 2>/dev/null | grep -q '${DOT_DOMAIN}'"
     check "DoT puerto 853"         "ss -tlnp | grep -q ':853'"
+    check "DoH puerto 8053 HTTP/1.1" "curl -sk --http1.1 -H 'accept: application/dns-message' -o /dev/null -w '%{http_code}' 'https://127.0.0.1:8053/dns-query?dns=AAABAAABAAAAAAAABmdvb2dsZQNjb20AAAEAAQ' 2>/dev/null | grep -q '200'"
 fi
 [[ "$EXPORTER_INSTALLED" == true ]] && \
     check "unbound_exporter"       "curl -s --max-time 5 http://127.0.0.1:${EXPORTER_PORT}/metrics | grep -q 'unbound_up'"
