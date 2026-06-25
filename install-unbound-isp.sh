@@ -423,6 +423,10 @@ ${V6_LISTEN}
     private-address: fd00::/8
     private-address: fe80::/10
     unwanted-reply-threshold: 10000
+    ratelimit: 1000
+    ratelimit-factor: 10
+    ratelimit-backoff: yes
+    ip-ratelimit: 0
 
     # ── Control de acceso ──────────────────────────────────────────────────────
 $(printf "%b" "$ACL_BLOCK")
