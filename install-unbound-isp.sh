@@ -28,7 +28,6 @@ ask()  { echo -e "${CYAN}${BOLD}→${NC} $1"; }
 
 # ── Variables (se llenan por menú o por valores hardcodeados) ──────────────────
 CLIENT_NETWORKS=()
-MONITORING_NETWORKS=()
 DOT_DOMAIN=""
 
 # ==============================================================================
@@ -130,61 +129,8 @@ interactive_menu() {
     done
     echo ""
 
-    # ── PASO 2: Redes de monitoreo ─────────────────────────────────────────────
-    echo -e "${BOLD}[2/3] REDES CON ACCESO A MÉTRICAS (Prometheus :9090)${NC}"
-    echo -e "      Ingresa las IPs o rangos desde donde se consultará Prometheus."
-    echo -e "      Ejemplos: tu servidor Grafana, tu red de gestión."
-    echo -e "      Escribe ${CYAN}mismo${NC} para usar las mismas redes DNS."
-    echo -e "      Escribe ${CYAN}listo${NC} cuando termines (mínimo 1 entrada)."
-    echo ""
-
-    while true; do
-        ask "Red o IP para métricas (o 'mismo' / 'listo'): "
-        read -r input
-        input=$(echo "$input" | tr '[:upper:]' '[:lower:]' | xargs)
-
-        case "$input" in
-            mismo|same|"")
-                MONITORING_NETWORKS=("${CLIENT_NETWORKS[@]}")
-                ok "Usando las mismas redes que DNS."
-                break
-                ;;
-            listo|done)
-                if [[ ${#MONITORING_NETWORKS[@]} -eq 0 ]]; then
-                    warn "Debes ingresar al menos una red."
-                    continue
-                fi
-                break
-                ;;
-            *)
-                local net; net=$(normalize_network "$input")
-                if validate_network "$net"; then
-                    local dup=false
-                    for existing in "${MONITORING_NETWORKS[@]}"; do
-                        [[ "$existing" == "$net" ]] && dup=true && break
-                    done
-                    if [[ "$dup" == true ]]; then
-                        warn "  ${net} ya está en la lista."
-                    else
-                        MONITORING_NETWORKS+=("$net")
-                        ok "Agregado: ${net}"
-                    fi
-                else
-                    warn "  '${input}' no es una IP o CIDR válido."
-                fi
-                ;;
-        esac
-    done
-
-    echo ""
-    echo -e "  Redes de monitoreo:"
-    for net in "${MONITORING_NETWORKS[@]}"; do
-        echo -e "    ${CYAN}•${NC} $net"
-    done
-    echo ""
-
-    # ── PASO 3: Dominio DoH/DoT ─────────────────────────────────────────────────
-    echo -e "${BOLD}[3/3] DOMINIO PARA DoH / DoT  (DNS-over-HTTPS / DNS-over-TLS)${NC}"
+    # ── PASO 2: Dominio DoH/DoT ─────────────────────────────────────────────────
+    echo -e "${BOLD}[2/2] DOMINIO PARA DoH / DoT  (DNS-over-HTTPS / DNS-over-TLS)${NC}"
     echo -e "      Requisito: el dominio debe tener un registro ${CYAN}A → ${SERVER_IP}${NC}"
     echo -e "      El instalador obtiene el certificado Let's Encrypt automáticamente."
     echo ""
@@ -210,8 +156,7 @@ interactive_menu() {
     echo -e "${BOLD}  RESUMEN DE INSTALACIÓN${NC}"
     echo -e "${BOLD}────────────────────────────────────────────────────────────${NC}"
     echo -e "  Servidor:         ${BOLD}${SERVER_IP}${NC}"
-    echo -e "  Redes DNS:        ${CYAN}$(IFS=', '; echo "${CLIENT_NETWORKS[*]}")${NC}"
-    echo -e "  Redes métricas:   ${CYAN}$(IFS=', '; echo "${MONITORING_NETWORKS[*]}")${NC}"
+    echo -e "  Redes permitidas: ${CYAN}$(IFS=', '; echo "${CLIENT_NETWORKS[*]}")${NC}"
     if [[ -n "$DOT_DOMAIN" ]]; then
         echo -e "  DoH/DoT:          ${CYAN}${DOT_DOMAIN}${NC} (cert Let's Encrypt automático)"
     else
@@ -219,7 +164,7 @@ interactive_menu() {
     fi
     echo -e "  RAM:              ${RAM_MB}MB  •  Cache: $(( RAM_MB/16 ))m msg + $(( RAM_MB/8 ))m rrset"
     echo -e "  DNSSEC:           RFC 5011 + RFC 8198 (ICANN compliant)"
-    echo -e "  Prometheus:       ${CYAN}http://${SERVER_IP}:9090${NC} (solo redes métricas)"
+    echo -e "  Prometheus:       ${CYAN}http://${SERVER_IP}:9090${NC}"
     echo -e "  Logs DNS:         /var/log/unbound/queries.log (90 días)"
     echo -e "${BOLD}────────────────────────────────────────────────────────────${NC}"
     echo ""
@@ -234,10 +179,9 @@ interactive_menu() {
 if [[ -t 0 ]]; then
     interactive_menu
 else
-    # Modo no-interactivo: CLIENT_NETWORKS y MONITORING_NETWORKS deben estar configurados arriba
+    # Modo no-interactivo: CLIENT_NETWORKS debe estar configurado arriba
     [[ ${#CLIENT_NETWORKS[@]} -eq 0 ]] && \
         err "Sin terminal interactiva y CLIENT_NETWORKS vacío. Edita el script o ejecútalo con una TTY."
-    [[ ${#MONITORING_NETWORKS[@]} -eq 0 ]] && MONITORING_NETWORKS=("${CLIENT_NETWORKS[@]}")
 fi
 
 # ==============================================================================
@@ -895,7 +839,7 @@ if [[ -n "$DOT_DOMAIN" && -f /etc/unbound/tls/fullchain.pem ]]; then
     ufw allow proto tcp to any port 853  comment "DoT" >/dev/null 2>&1 || true
     ufw allow proto tcp to any port 8053 comment "DoH" >/dev/null 2>&1 || true
 fi
-for net in "${MONITORING_NETWORKS[@]}"; do
+for net in "${CLIENT_NETWORKS[@]}"; do
     ufw allow proto tcp from "$net" to any port "$PROMETHEUS_PORT" comment "Prometheus" >/dev/null 2>&1 || true
 done
 
@@ -952,8 +896,7 @@ echo -e "${BLUE}╠════════════════════�
 echo -e "${BLUE}║${NC}  Tests: ${GREEN}${PASS} OK${NC} / ${RED}${FAIL} FAIL${NC}"
 echo -e "${BLUE}║${NC}"
 echo -e "${BLUE}║${NC}  DNS (UDP/TCP):    ${BOLD}${SERVER_IP}:53${NC}"
-echo -e "${BLUE}║${NC}  Redes DNS:        $(IFS=', '; echo "${CLIENT_NETWORKS[*]}")"
-echo -e "${BLUE}║${NC}  Redes métricas:   $(IFS=', '; echo "${MONITORING_NETWORKS[*]}")"
+echo -e "${BLUE}║${NC}  Redes permitidas: $(IFS=', '; echo "${CLIENT_NETWORKS[*]}")"
 if [[ -n "$DOT_DOMAIN" && -f /etc/unbound/tls/fullchain.pem ]]; then
 echo -e "${BLUE}║${NC}  DoT:              tls://${DOT_DOMAIN}:853"
 echo -e "${BLUE}║${NC}  DoH:              https://${DOT_DOMAIN}:8053/dns-query"
